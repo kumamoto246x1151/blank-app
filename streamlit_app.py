@@ -12,9 +12,10 @@ DATA_FILE = "health_data.csv"
 # データの読み込み関数
 def load_data():
     if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE)
+        # 日付カラムをdatetime型として読み込む
+        df = pd.read_csv(DATA_FILE)
+        return df
     else:
-        # ファイルがない場合は空のDataFrameを作成
         return pd.DataFrame(columns=["日付", "運動時間(分)", "睡眠時間(時間)", "気分", "メモ"])
 
 # データの保存関数
@@ -39,7 +40,7 @@ def main():
         input_memo = st.text_area("ひとことメモ", height=100)
 
         if st.button("記録を追加する"):
-            # 新しいデータ行を作成
+            # 新しいデータ行
             new_data = pd.DataFrame({
                 "日付": [input_date],
                 "運動時間(分)": [input_exercise],
@@ -48,24 +49,30 @@ def main():
                 "メモ": [input_memo]
             })
             
-            # 既存データと結合（日付を文字列に変換して重複排除などの処理を入れても良いが今回は単純追加）
+            # 日付を統一して扱うために一旦datetime型に変換
+            new_data["日付"] = pd.to_datetime(new_data["日付"]).dt.date
+            if not df.empty:
+                df["日付"] = pd.to_datetime(df["日付"]).dt.date
+
+            # 既存データと結合
             df = pd.concat([df, new_data], ignore_index=True)
             
+            # 同じ日のデータが既にある場合は、古い方を消して新しい方を残す（上書き保存のような挙動）
+            df = df.drop_duplicates(subset=["日付"], keep='last')
+            
             # 日付でソート
-            df["日付"] = pd.to_datetime(df["日付"])
             df = df.sort_values("日付")
             
             save_data(df)
             st.success("記録しました！")
+            st.rerun() # 画面を更新
 
     # --- メインエリア：可視化 ---
-    
-    # データが存在する場合のみ表示
     if not df.empty:
-        # 日付型への変換（念のため）
+        # データ処理用に日付型を確実に変換
         df["日付"] = pd.to_datetime(df["日付"]).dt.date
 
-        # 重要指標（KPI）の表示
+        # 重要指標（KPI）
         st.subheader("📊 直近のサマリー")
         col1, col2, col3 = st.columns(3)
         
@@ -78,7 +85,6 @@ def main():
             st.metric("累計運動時間", f"{total_exercise} 分")
         
         with col3:
-            # 最新の気分を表示
             latest_mood = df.iloc[-1]["気分"]
             st.metric("最新の気分", latest_mood)
 
@@ -86,24 +92,40 @@ def main():
 
         # グラフエリア
         st.subheader("📈 推移グラフ")
-        
         tab1, tab2 = st.tabs(["睡眠時間の推移", "運動時間の推移"])
         
+        chart_data = df.set_index("日付")
+        
         with tab1:
-            # 日付をインデックスにするとチャートが見やすい
-            chart_data = df.set_index("日付")
             st.line_chart(chart_data["睡眠時間(時間)"])
-            
         with tab2:
             st.bar_chart(chart_data["運動時間(分)"])
 
         st.divider()
 
-        # データ一覧
-        with st.expander("詳細データを見る"):
+        # --- データ管理エリア（削除機能付き） ---
+        st.subheader("🛠 データ管理")
+        
+        with st.expander("データの確認・削除はこちら"):
             st.dataframe(df, use_container_width=True)
             
-            # CSVダウンロードボタン
+            st.write("---")
+            st.write("🗑 **データの削除**")
+            
+            # 削除対象の日付を選択するセレクトボックス
+            # 日付リストを作成（新しい順）
+            date_options = df["日付"].sort_values(ascending=False).astype(str).unique()
+            delete_target = st.selectbox("削除したい日付を選択してください", options=date_options)
+            
+            if st.button("選択した日のデータを削除"):
+                # 文字列比較で削除対象を特定
+                df = df[df["日付"].astype(str) != delete_target]
+                save_data(df)
+                st.warning(f"{delete_target} のデータを削除しました。")
+                st.rerun() # 画面をリロードして反映
+
+            st.write("---")
+            # CSVダウンロード
             csv = df.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="CSVデータをダウンロード",
@@ -111,6 +133,7 @@ def main():
                 file_name='health_data.csv',
                 mime='text/csv',
             )
+
     else:
         st.info("サイドバーから今日のデータを入力してください👈")
 
